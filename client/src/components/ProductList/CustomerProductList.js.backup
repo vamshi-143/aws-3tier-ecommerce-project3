@@ -9,37 +9,25 @@ const ProductListCustomer = (props) => {
   const customerId = sessionStorage.getItem("customerId");
   const [address, setAddress] = useState("");
 
-useEffect(() => {
-  axios
-    .get(`${getBaseURL()}api/products`)
-    .then((res) => {
-      const products = res.data.map((product) => ({
-        ...product,
-        quantity: 0,
-      }));
-
-      // Show products immediately
-      setProductList(products);
-
-      // Then load the user's cart
-      if (customerId) {
+  useEffect(() => {
+    axios
+      .get(`${getBaseURL()}api/products`)
+      .then((res) => {
+        res.data.forEach((product) => {
+          product.quantity = 0;
+        });
         axios
           .get(`${getBaseURL()}api/cart/${customerId}`)
           .then((responseCart) => {
-            setCartProducts(responseCart.data);
+            let productsInCart = responseCart.data;
+            setCartProducts(productsInCart);
+            setProductList(res.data);
           })
-          .catch((err) => {
-            console.log("Error loading cart:", err);
-            setCartProducts([]);
-          });
-      }
-    })
-    .catch((err) => {
-      console.error("Error loading products:", err);
-    });
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+          .catch((err) => console.log("Error occurred"));
+      })
+      .catch((err) => console.log("Error"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addToCart = (product) => {
     if (product.quantity > 0) {

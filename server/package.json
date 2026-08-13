@@ -12,6 +12,8 @@
     "author": "",
     "license": "ISC",
     "dependencies": {
+        "@aws-sdk/client-dynamodb": "^3.1108.0",
+        "@aws-sdk/lib-dynamodb": "^3.1108.0",
         "bcryptjs": "^2.4.3",
         "cookie-parse": "^0.4.0",
         "cors": "^2.8.5",

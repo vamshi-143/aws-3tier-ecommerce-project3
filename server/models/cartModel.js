@@ -1,123 +1,224 @@
-// cartModel.js
+const {
+    GetCommand,
+    PutCommand,
+    UpdateCommand,
+    DeleteCommand,
+    QueryCommand,
+    BatchWriteCommand
+} = require("@aws-sdk/lib-dynamodb");
 
-const pool = require("../database/connection");
+const dynamoDB = require("../database/dynamodb");
 
-exports.getShoppingCart = (userId) => {
-    return new Promise((resolve, reject) => {
-        pool.query(
-            "SELECT S.quantity, P.name, P.price, P.productId FROM shopingCart S INNER JOIN product P ON S.productId = P.productId WHERE S.userId = ?",
-            [userId],
-            (err, result) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(result);
-                }
+const TABLE_NAME = process.env.DYNAMODB_TABLE || "EcommerceDB";
+
+// Get shopping cart
+exports.getShoppingCart = async (userId) => {
+    const result = await dynamoDB.send(
+        new QueryCommand({
+            TableName: TABLE_NAME,
+            KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+                ":pk": `USER#${userId}`,
+                ":sk": "CART#"
             }
-        );
-    });
-};
+        })
+    );
 
-exports.addToCart = (customerId, productId, quantity, isPresent) => {
-    return new Promise((resolve, reject) => {
-        if (isPresent) {
-            pool.query(
-                "UPDATE shopingCart SET quantity = quantity + ? WHERE productId = ? AND userId = ?",
-                [quantity, productId, customerId],
-                (err, result) => {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        resolve(result);
-                    }
+    const cartItems = result.Items || [];
+    const products = [];
+
+    for (const cartItem of cartItems) {
+        const productResult = await dynamoDB.send(
+            new GetCommand({
+                TableName: TABLE_NAME,
+                Key: {
+                    PK: `PRODUCT#${cartItem.productId}`,
+                    SK: "PRODUCT"
                 }
-            );
-        } else {
-            pool.query(
-                "INSERT INTO shopingCart (userId, productId, quantity) VALUES (?, ?, ?)",
-                [customerId, productId, quantity],
-                (err, result) => {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        resolve(result);
-                    }
-                }
-            );
+            })
+        );
+
+        const product = productResult.Item;
+
+        if (product) {
+            products.push({
+                quantity: cartItem.quantity,
+                name: product.name,
+                price: product.price,
+                productId: product.productId
+            });
         }
-    });
+    }
+
+    return products;
 };
 
-exports.removeFromCart = (productId, userId) => {
-    return new Promise((resolve, reject) => {
-        pool.query(
-            "DELETE FROM shopingCart WHERE productId = ? AND userId = ?",
-            [productId, userId],
-            (err, result) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(result);
-                }
-            }
+// Add product to cart
+exports.addToCart = async (
+    customerId,
+    productId,
+    quantity,
+    isPresent
+) => {
+    const key = {
+        PK: `USER#${customerId}`,
+        SK: `CART#${productId}`
+    };
+
+    if (isPresent) {
+        const result = await dynamoDB.send(
+            new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: key,
+                UpdateExpression: "SET quantity = quantity + :quantity",
+                ExpressionAttributeValues: {
+                    ":quantity": Number(quantity)
+                },
+                ReturnValues: "ALL_NEW"
+            })
         );
-    });
+
+        return result.Attributes;
+    }
+
+    const cartItem = {
+        PK: `USER#${customerId}`,
+        SK: `CART#${productId}`,
+        entityType: "CART",
+        userId: customerId,
+        productId: productId,
+        quantity: Number(quantity)
+    };
+
+    await dynamoDB.send(
+        new PutCommand({
+            TableName: TABLE_NAME,
+            Item: cartItem
+        })
+    );
+
+    return cartItem;
 };
 
-exports.buy = (customerId, address) => {
-    return new Promise((resolve, reject) => {
-        // Create order
-        pool.query(
-            "INSERT INTO orders (userId, address) VALUES (?, ?);",
-            [customerId, address],
-            (err, orderResult) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    // Move items from shopping cart to products in order
-                    pool.query(
-                        "INSERT INTO productsInOrder (orderId, productId, quantity, totalPrice) " +
-                        "SELECT (SELECT max(orderId) FROM orders WHERE userId = ?), S.productId, S.quantity, P.price * S.quantity " +
-                        "FROM shopingCart S INNER JOIN product P ON S.productId = P.productId " +
-                        "WHERE S.userId = ?;",
-                        [customerId, customerId],
-                        (err, productsResult) => {
-                            if (err) {
-                                reject(err);
-                            } else {
-                                // Update total price in order table
-                                pool.query(
-                                    "UPDATE orders O " +
-                                    "SET totalPrice = (SELECT SUM(P.totalPrice) " +
-                                    "FROM productsInOrder P " +
-                                    "WHERE O.orderId = P.orderId " +
-                                    "GROUP BY O.orderId) " +
-                                    "WHERE userId = ? AND totalPrice IS NULL;",
-                                    customerId,
-                                    (err, totalPriceResult) => {
-                                        if (err) {
-                                            reject(err);
-                                        } else {
-                                            // Clear shopping cart
-                                            pool.query(
-                                                "DELETE FROM shopingCart WHERE userId = ?;",
-                                                customerId,
-                                                (err, clearCartResult) => {
-                                                    if (err) {
-                                                        reject(err);
-                                                    } else {
-                                                        resolve({ orderResult, productsResult, totalPriceResult, clearCartResult });
-                                                    }
-                                                }
-                                            );
-                                        }
-                                    }
-                                );
-                            }
-                        }
-                    );
-                }
+// Remove product from cart
+exports.removeFromCart = async (productId, userId) => {
+    const result = await dynamoDB.send(
+        new DeleteCommand({
+            TableName: TABLE_NAME,
+            Key: {
+                PK: `USER#${userId}`,
+                SK: `CART#${productId}`
+            },
+            ReturnValues: "ALL_OLD"
+        })
+    );
+
+    return result.Attributes || {};
+};
+
+// Buy / checkout
+exports.buy = async (customerId, address) => {
+    const cartResult = await dynamoDB.send(
+        new QueryCommand({
+            TableName: TABLE_NAME,
+            KeyConditionExpression:
+                "PK = :pk AND begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+                ":pk": `USER#${customerId}`,
+                ":sk": "CART#"
             }
+        })
+    );
+
+    const cartItems = cartResult.Items || [];
+
+    if (cartItems.length === 0) {
+        throw new Error("Shopping cart is empty");
+    }
+
+    const orderId = `O${Date.now()}`;
+
+    let totalPrice = 0;
+    const orderItems = [];
+
+    for (const cartItem of cartItems) {
+        const productResult = await dynamoDB.send(
+            new GetCommand({
+                TableName: TABLE_NAME,
+                Key: {
+                    PK: `PRODUCT#${cartItem.productId}`,
+                    SK: "PRODUCT"
+                }
+            })
         );
-    });
+
+        const product = productResult.Item;
+
+        if (!product) {
+            continue;
+        }
+
+        const itemTotal =
+            Number(product.price) *
+            Number(cartItem.quantity);
+
+        totalPrice += itemTotal;
+
+        orderItems.push({
+            productId: product.productId,
+            name: product.name,
+            price: Number(product.price),
+            quantity: Number(cartItem.quantity),
+            totalPrice: itemTotal
+        });
+    }
+
+    if (orderItems.length === 0) {
+        throw new Error("No valid products found in cart");
+    }
+
+    const order = {
+        PK: `ORDER#${orderId}`,
+        SK: "ORDER",
+        entityType: "ORDER",
+        orderId: orderId,
+        userId: customerId,
+        address: address,
+        totalPrice: totalPrice,
+        createdDate: new Date().toISOString(),
+        items: orderItems
+    };
+
+    await dynamoDB.send(
+        new PutCommand({
+            TableName: TABLE_NAME,
+            Item: order
+        })
+    );
+
+    const deleteRequests = cartItems.map(item => ({
+        DeleteRequest: {
+            Key: {
+                PK: item.PK,
+                SK: item.SK
+            }
+        }
+    }));
+
+    for (let i = 0; i < deleteRequests.length; i += 25) {
+        const batch = deleteRequests.slice(i, i + 25);
+
+        await dynamoDB.send(
+            new BatchWriteCommand({
+                RequestItems: {
+                    [TABLE_NAME]: batch
+                }
+            })
+        );
+    }
+
+    return {
+        order: order,
+        message: "Order placed successfully"
+    };
 };

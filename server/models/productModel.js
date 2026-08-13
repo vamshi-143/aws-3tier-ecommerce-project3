@@ -1,94 +1,113 @@
-// productModel.js
+const {
+    ScanCommand,
+    GetCommand,
+    PutCommand,
+    UpdateCommand,
+    DeleteCommand
+} = require("@aws-sdk/lib-dynamodb");
 
-const pool = require("../database/connection");
+const dynamoDB = require("../database/dynamodb");
 
-exports.getAllProducts = () => {
-    return new Promise((resolve, reject) => {
-        pool.query("SELECT * FROM product;", (err, result) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(result);
+const TABLE_NAME = process.env.DYNAMODB_TABLE || "EcommerceDB";
+
+// Get all products
+exports.getAllProducts = async () => {
+    const result = await dynamoDB.send(
+        new ScanCommand({
+            TableName: TABLE_NAME,
+            FilterExpression: "entityType = :type",
+            ExpressionAttributeValues: {
+                ":type": "PRODUCT"
             }
-        });
-    });
+        })
+    );
+
+    return result.Items || [];
 };
 
-
-exports.getProductDetailsById = (productId) => {
-    return new Promise((resolve, reject) => {
-        const query =
-            "SELECT * FROM product WHERE productId = ?";
-        pool.query(query, [productId], (err, result) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(result);
+// Get product by ID
+exports.getProductDetailsById = async (productId) => {
+    const result = await dynamoDB.send(
+        new GetCommand({
+            TableName: TABLE_NAME,
+            Key: {
+                PK: `PRODUCT#${productId}`,
+                SK: "PRODUCT"
             }
-        });
-    });
+        })
+    );
+
+    return result.Item || {};
 };
 
-exports.allOrderByProductId = (productId) => {
-    return new Promise((resolve, reject) => {
-        const query =
-            "SELECT O.orderId, U.fname, U.lname, O.createdDate, PIN.quantity, PIN.totalPrice " +
-            "FROM users U INNER JOIN orders O on U.userId  = O.userId " +
-            "INNER JOIN productsInOrder PIN on O.orderId = PIN.orderId " +
-            "INNER JOIN product P on PIN.productId = P.productId " +
-            "WHERE PIN.productId = ?;";
+// Create product
+exports.createProduct = async (name, price, description) => {
+    const productId = `P${Date.now()}`;
 
-        pool.query(query, [productId], (err, result) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(result);
-            }
-        });
-    });
+    const product = {
+        PK: `PRODUCT#${productId}`,
+        SK: "PRODUCT",
+        entityType: "PRODUCT",
+        productId: productId,
+        name: name,
+        price: Number(price),
+        description: description,
+        imageUrl: ""
+    };
+
+    await dynamoDB.send(
+        new PutCommand({
+            TableName: TABLE_NAME,
+            Item: product
+        })
+    );
+
+    return product;
 };
 
+// Update product
+exports.updateProduct = async (productId, name, price, description) => {
+    const result = await dynamoDB.send(
+        new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: {
+                PK: `PRODUCT#${productId}`,
+                SK: "PRODUCT"
+            },
+            UpdateExpression:
+                "SET #name = :name, price = :price, description = :description",
+            ExpressionAttributeNames: {
+                "#name": "name"
+            },
+            ExpressionAttributeValues: {
+                ":name": name,
+                ":price": Number(price),
+                ":description": description
+            },
+            ReturnValues: "ALL_NEW"
+        })
+    );
 
-exports.createProduct = (name, price, description) => {
-    return new Promise((resolve, reject) => {
-        pool.query(
-            "INSERT INTO product (name, price, description) VALUES (?,?,?);",
-            [name, price, description],
-            (err, result) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(result);
-                }
-            }
-        );
-    });
+    return result.Attributes;
 };
 
-exports.updateProduct = (productId, name, price, description) => {
-    return new Promise((resolve, reject) => {
-        pool.query(
-            "UPDATE product SET name = ?, price = ?, description = ? WHERE productId = ?",
-            [name, price, description, productId],
-            (err, result) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(result);
-                }
-            }
-        );
-    });
+// Delete product
+exports.deleteProduct = async (productId) => {
+    const result = await dynamoDB.send(
+        new DeleteCommand({
+            TableName: TABLE_NAME,
+            Key: {
+                PK: `PRODUCT#${productId}`,
+                SK: "PRODUCT"
+            },
+            ReturnValues: "ALL_OLD"
+        })
+    );
+
+    return result.Attributes || {};
 };
 
-exports.deleteProduct = (productId) => {
-    return new Promise((resolve, reject) => {
-        pool.query("DELETE FROM product WHERE productId = ?", [productId], (err, result) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(result);
-            }
-        });
-    });
+// Orders by product
+exports.allOrderByProductId = async () => {
+    return [];
 };
